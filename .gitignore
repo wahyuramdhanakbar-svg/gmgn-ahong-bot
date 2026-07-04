@@ -1,0 +1,11 @@
+# Sensitive data — never commit
+.env
+*.env
+config.json
+positions.json
+trade_log.json
+learn_data.json
+bot.log
+__pycache__/
+*.pyc
+.DS_Store

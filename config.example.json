@@ -1,0 +1,50 @@
+{
+  "chain": "sol",
+  "wallet_address": "YOUR_WALLET_ADDRESS",
+  "max_sol_per_trade": 0.05,
+  "min_sol_balance": 0.01,
+  "max_positions": 2,
+  "slippage": 4,
+  "priority_fee": 0.00005,
+  "tip_fee": 0.0001,
+  "anti_mev": false,
+  "loop_interval_seconds": 30,
+  "telegram_chat_id": "YOUR_CHAT_ID",
+  "strategies": {
+    "sniper": {
+      "enabled": true,
+      "max_age_minutes": 3,
+      "platforms": ["pump"]
+    },
+    "trending": {
+      "enabled": true,
+      "interval": "5m",
+      "limit": 15,
+      "min_price_change_5m": 10,
+      "min_volume": 5000
+    },
+    "smart_money": {
+      "enabled": false,
+      "min_smart_degen": 2,
+      "limit": 10
+    }
+  },
+  "filters": {
+    "max_rug_ratio": 0.15,
+    "max_dev_hold_rate": 0.06,
+    "min_market_cap": 200,
+    "max_market_cap": 100000,
+    "min_holders": 50
+  },
+  "tp_sl": {
+    "tp1": {"order_type": "profit_stop", "price_scale": "130", "sell_ratio": "70"},
+    "tp2": {"order_type": "profit_stop_trace", "price_scale": "200", "sell_ratio": "100", "drawdown_rate": "30"},
+    "sl":  {"order_type": "loss_stop", "price_scale": "80", "sell_ratio": "100"}
+  },
+  "learning": {
+    "enabled": true,
+    "min_trades_for_adjustment": 10,
+    "max_rug_ratio_adjust": 0.05,
+    "min_smart_degen_adjust": 1
+  }
+}
