@@ -597,3 +597,4 @@ def main():
 if __name__=="__main__":
     print("🚀 GMGN Multi-Filter Bot v2.0 starting...")
     sys.stdout.flush()
+    main()
