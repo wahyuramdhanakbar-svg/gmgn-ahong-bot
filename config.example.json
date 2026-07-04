@@ -41,10 +41,9 @@
     "tp2": {"order_type": "profit_stop_trace", "price_scale": "200", "sell_ratio": "100", "drawdown_rate": "30"},
     "sl":  {"order_type": "loss_stop", "price_scale": "80", "sell_ratio": "100"}
   },
-  "learning": {
+  "watchdog": {
     "enabled": true,
-    "min_trades_for_adjustment": 10,
-    "max_rug_ratio_adjust": 0.05,
-    "min_smart_degen_adjust": 1
+    "sl_price_scale": 78,
+    "time_stop_minutes": 12
   }
 }

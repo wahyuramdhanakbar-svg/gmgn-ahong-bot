@@ -16,7 +16,6 @@ Scans from **3 sources** (Sniper/Trenches, Trending, Smart Money), scores with a
 - 🎯 **TP/SL** — Trailing take-profit + stop-loss via GMGN conditional orders
 - 📱 **Telegram** — Real-time notifications for BUY, SELL, errors
 - 📊 **PnL Tracking** — Local trade log + position tracking
-- 🧠 **Auto-Learning** — Adjusts parameters based on trade history
 
 ---
 
@@ -95,7 +94,19 @@ pm2 save
 - If price drops 30% from peak → trailing sells remaining position
 - **-20% loss** → full stop loss cut
 
----
+### Watchdog (Backup Safety)
+
+| Parameter | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable watchdog system |
+| `sl_price_scale` | `78` | Force-sell if price drops 22% from entry (backup if GMGN SL fails) |
+| `time_stop_minutes` | `12` | Force-sell after 12 minutes regardless of price |
+
+The watchdog adds two safety nets:
+- **TIME-stop**: forces a market sell after 12 minutes (data shows hold >10m = 18% win rate)
+- **SL watchdog**: checks price via `token info` API and force-sells if below threshold (catches cases where GMGN `loss_stop` fails to trigger)
+
+### Filters
 
 ## 📊 Data & Analytics
 

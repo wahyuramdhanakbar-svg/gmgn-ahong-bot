@@ -18,7 +18,6 @@ import logging
 BASE_DIR = Path.home() / ".gmgn_sniper"
 CONFIG_FILE = BASE_DIR / "config.json"
 POSITIONS_FILE = BASE_DIR / "positions.json"
-LEARN_FILE = BASE_DIR / "learn_data.json"
 TRADE_LOG_FILE = BASE_DIR / "trade_log.json"
 SOL_MINT = "So11111111111111111111111111111111111111112"
 
@@ -71,7 +70,6 @@ LOOP_INT = CFG["loop_interval_seconds"]
 STRATS = CFG["strategies"]
 FILTER = CFG["filters"]
 TP_SL = CFG["tp_sl"]
-LEARN = CFG["learning"]
 
 # ── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -164,6 +162,40 @@ def check_portfolio():
         except:
             pass
     return h, None
+
+
+# ── WATCHDOG ────────────────────────────────────────────────────────────────
+
+WATCHDOG = CFG.get("watchdog", {
+    "enabled": True,
+    "sl_price_scale": 78,
+    "time_stop_minutes": 12,
+})
+
+def get_token_price(addr):
+    """Harga SOL token saat ini via GMGN token info API."""
+    d, e = rg(["token", "info", "--chain", CHAIN, "--address", addr])
+    if e or not d:
+        return None
+    try:
+        price_obj = d.get("price", {})
+        price = float(price_obj.get("price", 0))
+        return price if price > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+def sell_token(addr, symbol):
+    """Force market-sell seluruh balance token ke SOL via --percent 100."""
+    cmd = ["swap","--chain",CHAIN,"--from",WALLET,
+           "--input-token",addr,"--output-token",SOL_MINT,
+           "--percent","100",
+           "--slippage", str(max(SLIPPAGE, 8)),
+           "--priority-fee", str(PRIO_FEE), "--tip-fee", str(TIP_FEE)]
+    if ANTI_MEV: cmd.append("--anti-mev")
+    d, e = rg(cmd, 30)
+    if e: return None, e
+    return (d or {}).get("tx_hash",""), None
+
 
 # ── SCORING ──────────────────────────────────────────────────────────────────
 
@@ -343,6 +375,8 @@ def multi_scan():
             "score": score,
             "source": src,
             "price_change_5m": t2.get("price_change_percent5m",0),
+            "price": t2.get("price", 0),
+            "token_created_ts": t2.get("open_timestamp") or t2.get("creation_timestamp") or 0,
             "timestamp": now_ts()
         })
 
@@ -352,7 +386,7 @@ def multi_scan():
 # ── POSITION MONITOR ────────────────────────────────────────────────────────
 
 def evaluate_positions():
-    """Check which positions have been closed by GMGN TP/SL and record PnL."""
+    """Check positions: watchdog TIME-stop/SL, then reconcile closed positions with PnL."""
     pd = load_json(POSITIONS_FILE, {"open":[],"closed":[]})
     op = pd["open"]
     tlog = load_json(TRADE_LOG_FILE, {"trades":[]})
@@ -365,9 +399,51 @@ def evaluate_positions():
     now = now_ts()
     GRACE_SEC = 300
     closing = []
+
     for pos in op:
         ta = pos["token_address"]
-        if ta in held:
+        opened = pos.get("timestamp") or now
+        age_sec = now - opened
+        age_min = age_sec / 60
+
+        # ── WATCHDOG: TIME-stop & SL enforcement ──
+        watchdog_triggered = False
+        if WATCHDOG.get("enabled") and ta in held:
+            entry_price = pos.get("entry_price_sol") or 0
+
+            # TIME-stop: hold > 12 minutes
+            if age_min >= WATCHDOG["time_stop_minutes"]:
+                bal = next((t["balance"] for t in h["tokens"] if t["address"] == ta), 0)
+                if bal > 0:
+                    tx, err = sell_token(ta, pos.get("symbol","?"))
+                    if tx:
+                        logger.info(f"TIME_STOP — force sell {pos.get('symbol','?')} age={age_min:.1f}m")
+                        tg(f"⏱ <b>TIME_STOP</b> {pos.get('symbol','?')} — hold {age_min:.0f}m, force sold", "HTML")
+                        pos["close_type"] = "time_stop"
+                        watchdog_triggered = True
+                    else:
+                        logger.error(f"TIME_STOP SELL FAILED {pos.get('symbol','?')}: {err}")
+
+            # SL watchdog: harga turun di bawah threshold
+            if not watchdog_triggered and entry_price > 0:
+                cur = get_token_price(ta)
+                if cur and cur <= entry_price * WATCHDOG["sl_price_scale"] / 100:
+                    bal = next((t["balance"] for t in h["tokens"] if t["address"] == ta), 0)
+                    if bal > 0:
+                        tx, err = sell_token(ta, pos.get("symbol","?"))
+                        if tx:
+                            drop_pct = (1 - cur / entry_price) * 100
+                            logger.info(f"SL_WATCHDOG — force sell {pos.get('symbol','?')} drop={drop_pct:.1f}%")
+                            tg(f"🛑 <b>SL_WATCHDOG</b> {pos.get('symbol','?')} — dropped {drop_pct:.0f}%, force sold", "HTML")
+                            pos["close_type"] = "sl_watchdog"
+                            watchdog_triggered = True
+                        else:
+                            logger.error(f"SL_WATCHDOG SELL FAILED {pos.get('symbol','?')}: {err}")
+
+        if watchdog_triggered:
+            # Don't add to still; next loop will reconcile
+            pass
+        elif ta in held:
             still.append(pos)
         elif now - pos.get("timestamp", 0) < GRACE_SEC:
             still.append(pos)
@@ -385,16 +461,21 @@ def evaluate_positions():
 
         for pos in closing:
             logger.info(f"GMGN TRIGGER — {pos.get('symbol','?')} (TP/SL executed by system | PnL: {per_trade_pnl:+.4f} SOL)")
-            pd["closed"].append({**pos, "close_type": "gmgn_trigger", "close_ts": now,
+            pd["closed"].append({**pos, "close_type": pos.get("close_type", "gmgn_trigger"), "close_ts": now,
                                  "pnl_sol": round(per_trade_pnl, 6), "is_win": is_profit})
             tlog["trades"].append({
                 "token_address": pos["token_address"], "symbol": pos.get("symbol","?"),
                 "entry_sol": pos.get("amount_sol", 0),
                 "pnl_sol": round(per_trade_pnl, 6),
                 "is_win": is_profit,
-                "close_type": "gmgn_trigger", "source": pos.get("source","?"),
+                "close_type": pos.get("close_type", "gmgn_trigger"),
+                "close_reason": pos.get("close_type", "gmgn_trigger"),
+                "source": pos.get("source","?"),
                 "score_at_buy": pos.get("score", 0),
                 "rug_ratio": pos.get("rug_ratio", 0),
+                "token_age_min_at_buy": pos.get("token_age_min_at_buy"),
+                "liquidity_usd": pos.get("liquidity_usd"),
+                "hold_seconds": now - pos.get("timestamp", now),
                 "timestamp_open": pos.get("timestamp", 0), "timestamp_close": now
             })
 
@@ -470,13 +551,16 @@ def main():
                             "token_address":c["address"],"symbol":c["symbol"],
                             "name":c["name"],"amount_sol":MAX_SOL,
                             "entry_price":c.get("market_cap",0),
+                            "entry_price_sol":c.get("price", 0),
                             "score":c["score"],"source":c["source"],
                             "rug_ratio":c["rug_ratio"],
                             "smart_degen":c["smart_degen_count"],
                             "bundler_rate":c["bundler_rate"],
                             "holder_count":c["holder_count"],
                             "timestamp":now,
-                            "sol_at_open": sb
+                            "sol_at_open": sb,
+                            "token_age_min_at_buy": round((now - c.get("token_created_ts", now)) / 60, 1) if c.get("token_created_ts") else None,
+                            "liquidity_usd": c.get("liquidity", 0)
                         })
                         save_json(POSITIONS_FILE, pd)
 
